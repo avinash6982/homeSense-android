@@ -1,0 +1,7 @@
+sdk.dir=/path/to/Android/sdk
+
+# Supabase publishable/anon key for the sensor_readings table.
+# Get this from Supabase project settings > API. Copy this file to
+# local.properties (gitignored) and fill in your real key.
+supabase.apiKey=
+supabase.url=https://xwsgxdpwxnaucpgnbiwl.supabase.co
