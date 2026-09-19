@@ -60,6 +60,7 @@ import com.avinash.homesense.data.model.ComfortLevel
 import com.avinash.homesense.data.model.Reading
 import com.avinash.homesense.ui.components.ClimateErrorState
 import com.avinash.homesense.ui.components.DayTimelineCharts
+import com.avinash.homesense.ui.components.DayTimelineChartsSkeleton
 import com.avinash.homesense.ui.components.EmptyDayState
 import com.avinash.homesense.ui.util.rememberRelativeTimeText
 import java.time.LocalDate
@@ -133,6 +134,7 @@ fun ClimateScreen(
                     liveReading = liveState.reading,
                     liveComfort = liveState.comfortLevel,
                     daySummary = daySummary,
+                    isDayLoading = visiblePageState.isLoading,
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -220,6 +222,7 @@ private fun HeroConditionsCard(
     liveReading: Reading?,
     liveComfort: ComfortLevel?,
     daySummary: DaySummary?,
+    isDayLoading: Boolean,
 ) {
     val comfort = if (isToday) liveComfort else daySummary?.dominantComfort
     val gradient = comfort.heroGradient()
@@ -238,7 +241,7 @@ private fun HeroConditionsCard(
         ) {
             if (isToday) {
                 if (liveReading == null) {
-                    CircularProgressIndicator(color = Color.White)
+                    HeroLoadingContent()
                     return@Column
                 }
                 val relativeTime = rememberRelativeTimeText(liveReading.timestamp)
@@ -258,6 +261,10 @@ private fun HeroConditionsCard(
                 Spacer(modifier = Modifier.height(10.dp))
                 Text(text = relativeTime, style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.75f))
             } else {
+                if (isDayLoading) {
+                    HeroLoadingContent()
+                    return@Column
+                }
                 if (daySummary == null) {
                     HeroIcon(null)
                     Spacer(modifier = Modifier.height(8.dp))
@@ -289,6 +296,29 @@ private fun HeroConditionsCard(
             }
         }
     }
+}
+
+/**
+ * Mirrors the loaded hero content's exact structure (icon, big number line,
+ * humidity line, pill, footer line) with a spinner standing in for the icon,
+ * so the card doesn't change height once real data replaces it.
+ */
+@Composable
+private fun HeroLoadingContent() {
+    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(48.dp))
+    Spacer(modifier = Modifier.height(8.dp))
+    Text(
+        text = "--.-°C",
+        style = MaterialTheme.typography.displayLarge,
+        color = Color.Transparent,
+        fontWeight = FontWeight.Medium,
+    )
+    Spacer(modifier = Modifier.height(4.dp))
+    HeroHumidityLine("")
+    Spacer(modifier = Modifier.height(16.dp))
+    HeroComfortPill("")
+    Spacer(modifier = Modifier.height(10.dp))
+    Text(text = "", style = MaterialTheme.typography.bodySmall)
 }
 
 @Composable
@@ -415,10 +445,11 @@ private fun DayPageContent(
                 .padding(20.dp),
         ) {
             when {
-                pageState.isLoading -> Box(
-                    modifier = Modifier.fillMaxWidth().height(300.dp),
-                    contentAlignment = Alignment.Center,
-                ) { CircularProgressIndicator() }
+                pageState.isLoading -> Column {
+                    DayTimelineChartsSkeleton()
+                    Spacer(modifier = Modifier.height(16.dp))
+                    DayStatsRowSkeleton()
+                }
 
                 pageState.error != null -> ClimateErrorState(error = pageState.error, onRetry = onRetry)
 
@@ -451,6 +482,24 @@ private fun DayStatsRow(readings: List<Reading>) {
             StatItem(label = "High", value = "%.0f%%".format(humidities.max()))
             StatItem(label = "Low", value = "%.0f%%".format(humidities.min()))
             StatItem(label = "Avg", value = "%.0f%%".format(humidities.average()))
+        }
+    }
+}
+
+/** Same [StatItem] rows as [DayStatsRow] with placeholder values, so the loading skeleton matches its height. */
+@Composable
+private fun DayStatsRowSkeleton() {
+    Column {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            StatItem(label = "High", value = "--")
+            StatItem(label = "Low", value = "--")
+            StatItem(label = "Avg", value = "--")
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            StatItem(label = "High", value = "--")
+            StatItem(label = "Low", value = "--")
+            StatItem(label = "Avg", value = "--")
         }
     }
 }
