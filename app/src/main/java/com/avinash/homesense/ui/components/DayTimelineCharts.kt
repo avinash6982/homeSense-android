@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -43,7 +44,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -110,6 +113,26 @@ fun DayTimelineCharts(
     }
 }
 
+/**
+ * Placeholder matching [DayTimelineCharts]'s layout exactly (same legend row,
+ * chart height, and axis labels) so swapping it in while a day is loading
+ * doesn't change the card's height once real data arrives.
+ */
+@Composable
+fun DayTimelineChartsSkeleton(modifier: Modifier = Modifier) {
+    Column(modifier = modifier) {
+        LegendRow(buckets = emptyList(), tempColor = temperatureSeriesColor(), humidityColor = humiditySeriesColor())
+        Spacer(modifier = Modifier.height(8.dp))
+        Box(
+            modifier = Modifier.fillMaxWidth().height(220.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            CircularProgressIndicator()
+        }
+        HourAxisLabels()
+    }
+}
+
 @Composable
 private fun LegendRow(buckets: List<Bucket>, tempColor: Color, humidityColor: Color) {
     val lastTemp = buckets.lastOrNull { it.temperature != null }?.temperature
@@ -135,6 +158,9 @@ private fun LegendItem(color: Color, label: String, value: String?) {
 
 private data class ChartPoint(val bucketIndex: Int, val fraction: Double, val stat: BucketStat)
 
+/** Reserved on the left of the chart for temperature axis labels; [HourAxisLabels] below is padded to match. */
+private val AxisLabelWidth = 34.dp
+
 @Composable
 private fun CombinedChart(
     buckets: List<Bucket>,
@@ -156,6 +182,8 @@ private fun CombinedChart(
     val gridColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
     val nowLineColor = MaterialTheme.colorScheme.onSurfaceVariant
     val surfaceColor = MaterialTheme.colorScheme.surface
+    val axisTextStyle = MaterialTheme.typography.labelSmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
+    val textMeasurer = rememberTextMeasurer()
 
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
 
@@ -165,8 +193,10 @@ private fun CombinedChart(
             .height(height)
             .pointerInput(buckets) {
                 if (allPoints.isEmpty()) return@pointerInput
+                val leftInset = AxisLabelWidth.toPx()
+                val plotWidth = size.width - leftInset
                 detectTapGestures { offset ->
-                    val nearest = allPoints.minByOrNull { point -> abs(point.fraction * size.width - offset.x) }
+                    val nearest = allPoints.minByOrNull { point -> abs((leftInset + point.fraction * plotWidth) - offset.x) }
                     nearest?.let { onSelect(it.bucketIndex) }
                 }
             },
@@ -180,18 +210,37 @@ private fun CombinedChart(
             val topInset = 10.dp.toPx()
             val bottomInset = 10.dp.toPx()
             val plotHeight = size.height - topInset - bottomInset
+            val leftInset = AxisLabelWidth.toPx()
+            val plotWidth = size.width - leftInset
 
-            val gridSteps = 3
+            // 10 steps (11 lines) so the middle line always lands exactly on
+            // (min+max)/2 — 5 markers above the day's midpoint temperature,
+            // 5 below — rather than a coarser split that skips round values.
+            val gridSteps = 10
+            val tempRange = valueRange(tempPoints)
+            val tempStep = tempRange?.let { (min, max) -> (max - min) / gridSteps }
+            val labelPattern = if (tempStep != null && abs(tempStep) < 1.0) "%.1f°" else "%.0f°"
             for (step in 0..gridSteps) {
                 val y = topInset + plotHeight * step / gridSteps
-                drawLine(color = gridColor, start = Offset(0f, y), end = Offset(size.width, y), strokeWidth = 1.dp.toPx())
+                drawLine(color = gridColor, start = Offset(leftInset, y), end = Offset(size.width, y), strokeWidth = 1.dp.toPx())
+
+                if (tempRange != null) {
+                    val (minValue, maxValue) = tempRange
+                    val fractionFromTop = step.toFloat() / gridSteps
+                    val value = maxValue - fractionFromTop * (maxValue - minValue)
+                    val measured = textMeasurer.measure(labelPattern.format(value), style = axisTextStyle)
+                    drawText(
+                        textLayoutResult = measured,
+                        topLeft = Offset(leftInset - 6.dp.toPx() - measured.size.width, y - measured.size.height / 2f),
+                    )
+                }
             }
 
-            drawSeries(tempPoints, buckets, topInset, plotHeight, tempColor, surfaceColor)
-            drawSeries(humidityPoints, buckets, topInset, plotHeight, humidityColor, surfaceColor)
+            drawSeries(tempPoints, buckets, topInset, plotHeight, tempColor, surfaceColor, leftInset, plotWidth)
+            drawSeries(humidityPoints, buckets, topInset, plotHeight, humidityColor, surfaceColor, leftInset, plotWidth)
 
             if (nowFraction != null) {
-                val nowX = nowFraction.toFloat() * size.width
+                val nowX = leftInset + nowFraction.toFloat() * plotWidth
                 drawLine(
                     color = nowLineColor.copy(alpha = 0.35f),
                     start = Offset(nowX, topInset),
@@ -204,7 +253,7 @@ private fun CombinedChart(
             if (selectedIndex != null) {
                 val selectedPoint = allPoints.firstOrNull { it.bucketIndex == selectedIndex }
                 if (selectedPoint != null) {
-                    val selX = selectedPoint.fraction.toFloat() * size.width
+                    val selX = leftInset + selectedPoint.fraction.toFloat() * plotWidth
                     drawLine(
                         color = nowLineColor.copy(alpha = 0.4f),
                         start = Offset(selX, topInset),
@@ -212,8 +261,8 @@ private fun CombinedChart(
                         strokeWidth = 1.dp.toPx(),
                     )
                 }
-                drawSelectionDot(tempPoints, selectedIndex, topInset, plotHeight, size.width, tempColor, surfaceColor)
-                drawSelectionDot(humidityPoints, selectedIndex, topInset, plotHeight, size.width, humidityColor, surfaceColor)
+                drawSelectionDot(tempPoints, selectedIndex, topInset, plotHeight, leftInset, plotWidth, tempColor, surfaceColor)
+                drawSelectionDot(humidityPoints, selectedIndex, topInset, plotHeight, leftInset, plotWidth, humidityColor, surfaceColor)
             }
         }
 
@@ -245,6 +294,13 @@ private fun CombinedChart(
     }
 }
 
+/** Inclusive min/max across a series' min/max spread, or null if there's no data to range over. */
+private fun valueRange(points: List<ChartPoint>): Pair<Double, Double>? {
+    if (points.isEmpty()) return null
+    val allValues = points.flatMap { listOf(it.stat.min, it.stat.max) }
+    return allValues.min() to allValues.max()
+}
+
 private fun DrawScope.drawSeries(
     points: List<ChartPoint>,
     buckets: List<Bucket>,
@@ -252,6 +308,8 @@ private fun DrawScope.drawSeries(
     plotHeight: Float,
     seriesColor: Color,
     surfaceColor: Color,
+    leftInset: Float,
+    plotWidth: Float,
 ) {
     if (points.isEmpty()) return
     val allValues = points.flatMap { listOf(it.stat.min, it.stat.max) }
@@ -263,21 +321,22 @@ private fun DrawScope.drawSeries(
         val normalized = ((value - minValue) / range).toFloat()
         return topInset + plotHeight - (normalized * plotHeight)
     }
+    fun xOf(point: ChartPoint): Float = leftInset + point.fraction.toFloat() * plotWidth
 
     for (segment in points.splitOnGaps()) {
         if (segment.size >= 2) {
-            val meanPoints = segment.map { Offset(it.fraction.toFloat() * size.width, valueToY(it.stat.mean)) }
+            val meanPoints = segment.map { Offset(xOf(it), valueToY(it.stat.mean)) }
             val linePath = buildSmoothPath(meanPoints)
 
             val bandPath = buildBandPath(
-                segment.map { Offset(it.fraction.toFloat() * size.width, valueToY(it.stat.max)) },
-                segment.map { Offset(it.fraction.toFloat() * size.width, valueToY(it.stat.min)) },
+                segment.map { Offset(xOf(it), valueToY(it.stat.max)) },
+                segment.map { Offset(xOf(it), valueToY(it.stat.min)) },
             )
             drawPath(path = bandPath, color = seriesColor.copy(alpha = 0.08f), style = Fill)
             drawPath(path = linePath, color = seriesColor, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round))
 
             val last = segment.last()
-            val end = Offset(last.fraction.toFloat() * size.width, valueToY(last.stat.mean))
+            val end = Offset(xOf(last), valueToY(last.stat.mean))
             drawCircle(color = surfaceColor, radius = 6.dp.toPx(), center = end)
             if (last.bucketIndex == buckets.lastIndex && buckets.getOrNull(last.bucketIndex)?.isPartial == true) {
                 drawCircle(color = seriesColor, radius = 4.dp.toPx(), center = end, style = Stroke(width = 1.5.dp.toPx()))
@@ -286,7 +345,7 @@ private fun DrawScope.drawSeries(
             }
         } else {
             val p = segment[0]
-            val point = Offset(p.fraction.toFloat() * size.width, valueToY(p.stat.mean))
+            val point = Offset(xOf(p), valueToY(p.stat.mean))
             drawCircle(color = surfaceColor, radius = 6.dp.toPx(), center = point)
             drawCircle(color = seriesColor, radius = 4.dp.toPx(), center = point)
         }
@@ -298,7 +357,8 @@ private fun DrawScope.drawSelectionDot(
     selectedIndex: Int?,
     topInset: Float,
     plotHeight: Float,
-    width: Float,
+    leftInset: Float,
+    plotWidth: Float,
     seriesColor: Color,
     surfaceColor: Color,
 ) {
@@ -309,7 +369,7 @@ private fun DrawScope.drawSelectionDot(
     val range = (maxValue - minValue).takeIf { it > 0.01 } ?: 1.0
     val normalized = ((selected.stat.mean - minValue) / range).toFloat()
     val y = topInset + plotHeight - (normalized * plotHeight)
-    val x = selected.fraction.toFloat() * width
+    val x = leftInset + selected.fraction.toFloat() * plotWidth
     drawCircle(color = surfaceColor, radius = 7.dp.toPx(), center = Offset(x, y))
     drawCircle(color = seriesColor, radius = 5.dp.toPx(), center = Offset(x, y))
 }
@@ -332,7 +392,7 @@ private fun List<ChartPoint>.splitOnGaps(): List<List<ChartPoint>> {
 @Composable
 private fun HourAxisLabels() {
     val hours = listOf("12AM", "6AM", "12PM", "6PM")
-    Row(modifier = Modifier.fillMaxWidth().padding(top = 2.dp)) {
+    Row(modifier = Modifier.fillMaxWidth().padding(top = 2.dp, start = AxisLabelWidth)) {
         hours.forEachIndexed { index, hour ->
             Text(
                 text = hour,
